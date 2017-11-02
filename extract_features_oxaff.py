@@ -32,7 +32,7 @@ if USE_CUDA:
     HA = HA.cuda()
     var_image = var_image.cuda()
 
-LAFs, patches, resp, pyr = HA(var_image)
+LAFs, resp  = HA(var_image)
 ells = LAFs2ell(LAFs.data.cpu().numpy())
 
 np.savetxt(output_fname, ells, delimiter=' ', fmt='%10.10f')

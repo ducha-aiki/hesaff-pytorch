@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from copy import deepcopy
+from scipy.spatial.distance import cdist
 from numpy.linalg import inv    
 from scipy.linalg import schur, sqrtm
 import torch
@@ -175,6 +176,9 @@ def extract_patches(img, LAFs, PS = 32):
     grid = generate_patch_grid_from_normalized_LAFs(LAFs, float(w),float(h), PS)
     return torch.nn.functional.grid_sample(img.expand(grid.size(0), ch, h, w),  grid)  
 
+def get_pyramid_inverted_index_for_LAFs(LAFs, PS, sigmas):
+    return
+
 def extract_patches_from_pyramid_with_inv_index(scale_pyramid, pyr_inv_idxs, LAFs, PS = 19):
     patches = torch.zeros(LAFs.size(0),scale_pyramid[0][0].size(1), PS, PS)
     if LAFs.is_cuda:
@@ -241,3 +245,26 @@ def sc_y_x2LAFs(sc_y_x):
                                     sc_y_x[:,1:2].unsqueeze(-1)], dim=1)], dim = 2)
         
     return LAFs
+def get_LAFs_scales(LAFs):
+    return torch.sqrt(torch.abs(LAFs[:,0,0] *LAFs[:,1,1] - LAFs[:,0,1] * LAFs[:,1,0]) + 1e-12)
+
+def get_pyramid_and_level_index_for_LAFs(dLAFs,  sigmas, pix_dists, PS):
+    scales = get_LAFs_scales(dLAFs);
+    needed_sigmas = scales / PS;
+    sigmas_full_list = []
+    level_idxs_full = []
+    oct_idxs_full = []
+    for oct_idx in range(len(sigmas)):
+        sigmas_full_list = sigmas_full_list + list(np.array(sigmas[oct_idx])*np.array(pix_dists[oct_idx]))
+        oct_idxs_full = oct_idxs_full + [oct_idx]*len(sigmas[oct_idx])
+        level_idxs_full = level_idxs_full + range(0,len(sigmas[oct_idx]))
+    oct_idxs_full = torch.LongTensor(oct_idxs_full)
+    level_idxs_full = torch.LongTensor(level_idxs_full)
+    
+    closest_imgs = cdist(np.array(sigmas_full_list).reshape(-1,1), needed_sigmas.data.cpu().numpy().reshape(-1,1)).argmin(axis = 0)
+    closest_imgs = torch.from_numpy(closest_imgs)
+    if dLAFs.is_cuda:
+        closest_imgs = closest_imgs.cuda()
+        oct_idxs_full = oct_idxs_full.cuda()
+        level_idxs_full = level_idxs_full.cuda()
+    return  Variable(oct_idxs_full[closest_imgs]), Variable(level_idxs_full[closest_imgs])

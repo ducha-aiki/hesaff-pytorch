@@ -7,6 +7,7 @@ from torch.autograd import Variable
 from copy import deepcopy
 from Utils import GaussianBlur, batch_eig2x2, line_prepender
 from LAF import LAFs2ell,abc2A, angles2A, generate_patch_grid_from_normalized_LAFs, extract_patches, get_inverted_pyr_index, denormalizeLAFs, extract_patches_from_pyramid_with_inv_index, rectifyAffineTransformationUpIsUp
+from LAF import get_pyramid_and_level_index_for_LAFs, normalizeLAFs
 from HandCraftedModules import HessianResp, AffineShapeEstimator, OrientationDetector, ScalePyramid, NMS3dAndComposeA
 import time
 
@@ -45,7 +46,7 @@ class ScaleSpaceAffinePatchExtractor(nn.Module):
     
     def multiScaleDetector(self,x, num_features = 0):
         t = time.time()
-        scale_pyr, sigmas, pix_dists = self.ScalePyrGen(x)
+        self.scale_pyr, self.sigmas, self.pix_dists = self.ScalePyrGen(x)
         ### Detect keypoints in scale space
         aff_matrices = []
         top_responces = []
@@ -53,15 +54,15 @@ class ScaleSpaceAffinePatchExtractor(nn.Module):
         level_idxs = []
         det_t = 0
         nmst = 0
-        for oct_idx in range(len(sigmas)):
+        for oct_idx in range(len(self.sigmas)):
             #print oct_idx
-            octave = scale_pyr[oct_idx]
-            sigmas_oct = sigmas[oct_idx]
-            pix_dists_oct = pix_dists[oct_idx]
+            octave = self.scale_pyr[oct_idx]
+            sigmas_oct = self.sigmas[oct_idx]
+            pix_dists_oct = self.pix_dists[oct_idx]
             low = None
             cur = None
             high = None
-            octaveMap = (scale_pyr[oct_idx][0] * 0).byte()
+            octaveMap = (self.scale_pyr[oct_idx][0] * 0).byte()
             nms_f = NMS3dAndComposeA(w = octave[0].size(3),
                                      h =  octave[0].size(2),
                                      border = self.b, mrSize = self.mrSize)
@@ -100,16 +101,15 @@ class ScaleSpaceAffinePatchExtractor(nn.Module):
             final_pyr_idxs = pyr_idxs_scales[idxs]
             final_level_idxs = level_idxs_scale[idxs]
         else:
-            return all_responses, aff_m_scales, pyr_idxs_scales , level_idxs_scale, scale_pyr
-        return all_responses, LAFs, final_pyr_idxs, final_level_idxs, scale_pyr
+            return all_responses, aff_m_scales, pyr_idxs_scales , level_idxs_scale
+        return all_responses, LAFs, final_pyr_idxs, final_level_idxs,
     
-    def getAffineShape(self,scale_pyr, final_resp, LAFs, final_pyr_idxs, final_level_idxs, num_features = 0):
+    def getAffineShape(self, final_resp, LAFs, final_pyr_idxs, final_level_idxs, num_features = 0):
         pe_time = 0
         affnet_time = 0
-        pyr_inv_idxs = get_inverted_pyr_index(scale_pyr, final_pyr_idxs, final_level_idxs)
-        #print LAFs[0:2,:,:]
+        pyr_inv_idxs = get_inverted_pyr_index(self.scale_pyr, final_pyr_idxs, final_level_idxs)
         t = time.time()
-        patches_small = extract_patches_from_pyramid_with_inv_index(scale_pyr, pyr_inv_idxs, LAFs, PS = self.AffNet.PS)
+        patches_small = extract_patches_from_pyramid_with_inv_index(self.scale_pyr, pyr_inv_idxs, LAFs, PS = self.AffNet.PS)
         pe_time+=time.time() - t
         t = time.time()
         
@@ -132,7 +132,7 @@ class ScaleSpaceAffinePatchExtractor(nn.Module):
             if i != self.num_Baum_iters - 1:
                 pe_time+=time.time() - t
                 t = time.time()
-                patches_small =  extract_patches_from_pyramid_with_inv_index(scale_pyr, pyr_inv_idxs, new_LAFs, PS = self.AffNet.PS)
+                patches_small =  extract_patches_from_pyramid_with_inv_index(self.scale_pyr, pyr_inv_idxs, new_LAFs, PS = self.AffNet.PS)
                 pe_time+=time.time() - t
                 l1,l2 = batch_eig2x2(A)      
                 ratio1 =  torch.abs(l1 / (l2 + 1e-8))
@@ -169,9 +169,9 @@ class ScaleSpaceAffinePatchExtractor(nn.Module):
         print 'pe_time', pe_time
         return final_resp, new_LAFs, final_pyr_idxs, final_level_idxs  
     
-    def getOrientation(self,scale_pyr, LAFs, final_pyr_idxs, final_level_idxs):
-        pyr_inv_idxs = get_inverted_pyr_index(scale_pyr, final_pyr_idxs, final_level_idxs)
-        patches_small =  extract_patches_from_pyramid_with_inv_index(scale_pyr, pyr_inv_idxs, LAFs, PS = self.OriNet.PS)
+    def getOrientation(self, LAFs, final_pyr_idxs, final_level_idxs):
+        pyr_inv_idxs = get_inverted_pyr_index(self.scale_pyr, final_pyr_idxs, final_level_idxs)
+        patches_small =  extract_patches_from_pyramid_with_inv_index(self.scale_pyr, pyr_inv_idxs, LAFs, PS = self.OriNet.PS)
         max_iters = 1
         ### Detect orientation
         for i in range(max_iters):
@@ -179,27 +179,33 @@ class ScaleSpaceAffinePatchExtractor(nn.Module):
             #print np.degrees(ori.data.cpu().numpy().ravel()[1])
             LAFs = torch.cat([torch.bmm(angles2A(angles), LAFs[:,:,:2]), LAFs[:,:,2:]], dim = 2)
             if i != max_iters:
-                patches_small = extract_patches_from_pyramid_with_inv_index(scale_pyr, pyr_inv_idxs, LAFs, PS = self.OriNet.PS)        
+                patches_small = extract_patches_from_pyramid_with_inv_index(self.scale_pyr, pyr_inv_idxs, LAFs, PS = self.OriNet.PS)        
         return LAFs
-    
+    def extract_patches_from_pyr(self, dLAFs, PS = 41):
+        pyr_idxs, level_idxs = get_pyramid_and_level_index_for_LAFs(dLAFs, self.sigmas, self.pix_dists, PS)
+        pyr_inv_idxs = get_inverted_pyr_index(self.scale_pyr, pyr_idxs, level_idxs)
+        patches = extract_patches_from_pyramid_with_inv_index(self.scale_pyr,
+                                                      pyr_inv_idxs,
+                                                      normalizeLAFs(dLAFs, self.scale_pyr[0][0].size(2), self.scale_pyr[0][0].size(3)), 
+                                                      PS = PS)
+        return patches
     def forward(self,x):
         ### Detection
         t = time.time()
         num_features_prefilter = self.num
         if self.num_Baum_iters > 0:
             num_features_prefilter = int(1.5 * self.num);
-        responses, LAFs, final_pyr_idxs, final_level_idxs,scale_pyr = self.multiScaleDetector(x,num_features_prefilter)
+        responses, LAFs, final_pyr_idxs, final_level_idxs = self.multiScaleDetector(x,num_features_prefilter)
         print time.time() - t, 'detection multiscale'
         t = time.time()
-        
         LAFs[:,0:2,0:2] =   self.mrSize * LAFs[:,:,0:2]
         if self.num_Baum_iters > 0:
-            responses, LAFs, final_pyr_idxs, final_level_idxs  = self.getAffineShape(scale_pyr, responses, LAFs, final_pyr_idxs, final_level_idxs, self.num)
+            responses, LAFs, final_pyr_idxs, final_level_idxs  = self.getAffineShape(responses, LAFs, final_pyr_idxs, final_level_idxs, self.num)
         print time.time() - t, 'affine shape iters'
         t = time.time()
         #LAFs = self.getOrientation(scale_pyr, LAFs, final_pyr_idxs, final_level_idxs)
         #pyr_inv_idxs = get_inverted_pyr_index(scale_pyr, final_pyr_idxs, final_level_idxs)
         #patches = extract_patches_from_pyramid_with_inv_index(scale_pyr, pyr_inv_idxs, LAFs, PS = self.PS)
-        patches = extract_patches(x, LAFs, PS = self.PS)
-        print time.time() - t, len(LAFs), ' patches extraction'
-        return denormalizeLAFs(LAFs, x.size(3), x.size(2)), patches, responses, scale_pyr
+        #patches = extract_patches(x, LAFs, PS = self.PS)
+        #print time.time() - t, len(LAFs), ' patches extraction'
+        return denormalizeLAFs(LAFs, x.size(3), x.size(2)), responses
