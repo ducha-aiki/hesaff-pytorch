@@ -186,7 +186,7 @@ class ScaleSpaceAffinePatchExtractor(nn.Module):
         pyr_inv_idxs = get_inverted_pyr_index(self.scale_pyr, pyr_idxs, level_idxs)
         patches = extract_patches_from_pyramid_with_inv_index(self.scale_pyr,
                                                       pyr_inv_idxs,
-                                                      normalizeLAFs(dLAFs, self.scale_pyr[0][0].size(2), self.scale_pyr[0][0].size(3)), 
+                                                      normalizeLAFs(dLAFs, self.scale_pyr[0][0].size(3), self.scale_pyr[0][0].size(2)), 
                                                       PS = PS)
         return patches
     def forward(self,x):

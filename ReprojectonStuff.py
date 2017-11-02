@@ -20,16 +20,31 @@ def LAFs_to_H_frames(aff_pts):
     H3_x = torch.autograd.Variable(H3_x)
     return torch.cat([aff_pts, H3_x], dim = 1)
 
+
+def linH(H, x, y):
+    assert x.size(0) == y.size(0)
+    A = torch.zeros(x.size(0),2,2)
+    if x.is_cuda:
+        A = A.cuda()
+    A = Variable(A)
+    den = x * H[2,0] + y * H[2,1] + H[2,2]
+    num1_densq = (x*H[0,0] + y*H[0,1] + H[0,2]) / (den*den)
+    num2_densq = (x*H[1,0] + y*H[1,1] + H[1,2]) / (den*den)
+    A[:,0,0] = H[0,0]/den - num1_densq * H[2,0]
+    A[:,0,1] = H[0,1]/den - num1_densq * H[2,1]
+    A[:,1,0] = H[1,0]/den - num2_densq * H[2,0]
+    A[:,1,1] = H[1,1]/den - num2_densq * H[2,1]
+    return A
+
 def reprojectLAFs(LAFs1, H1to2, return_LHFs = False):
     LHF1 = LAFs_to_H_frames(LAFs1)
-    LHF1_reprojected_to_2 = torch.bmm(H1to2.expand_as(LHF1), LHF1)
-    LHF1_reprojected_to_2 = LHF1_reprojected_to_2 / LHF1_reprojected_to_2[:,2:,2:].expand_as(LHF1_reprojected_to_2);
-    LHF1_reprojected_to_2[:,2:,0:2] = 0
-    LHF1_reprojected_to_2[:,2:,2] = 1
+    xy1 = torch.bmm(H1to2.expand(LHF1.size(0),3,3), LHF1[:,:,2:])
+    xy1 = xy1 / xy1[:,2:,:].expand(xy1.size(0), 3, 1)
+    As  = linH(H1to2, LAFs1[:,0,2], LAFs1[:,1,2])
+    AF = torch.bmm(As, LHF1[:,0:2,0:2])
     if return_LHFs:
-        return LHF1_reprojected_to_2
-    
-    return LHF1_reprojected_to_2[:,:2, :]
+        return LAFs_to_H_frames(torch.cat([AF, xy1[:,:2,:]], dim = 2))
+    return torch.cat([AF, xy1[:,:2,:]], dim = 2)
     
 def inverseLHFs(LHFs):
     LHF1_inv =torch.zeros(LHFs.size())
