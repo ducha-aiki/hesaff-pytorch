@@ -143,13 +143,13 @@ class OrientationDetector(nn.Module):
         self.num_ang_bins = 36
         self.gx =  nn.Conv2d(1, 1, kernel_size=(1,3),  bias = False)
         self.gx.weight.data = torch.from_numpy(np.array([[[[0.5, 0, -0.5]]]], dtype=np.float32))
-        
+
         self.gy =  nn.Conv2d(1, 1, kernel_size=(3,1), bias = False)
         self.gy.weight.data = torch.from_numpy(np.array([[[[0.5], [0], [-0.5]]]], dtype=np.float32))
-        
+
         self.angular_smooth =  nn.Conv1d(1, 1, kernel_size=3, padding = 1, bias = False)
         self.angular_smooth.weight.data = torch.from_numpy(np.array([[[0.33, 0.34, 0.33]]], dtype=np.float32))
-        
+
         self.gk = 10. * torch.from_numpy(CircularGaussKernel(kernlen=self.PS).astype(np.float32))
         self.gk = Variable(self.gk, requires_grad=False)
         return
@@ -157,8 +157,16 @@ class OrientationDetector(nn.Module):
         bin_weight_stride = int(round(2.0 * np.floor(patch_size / 2) / float(num_spatial_bins + 1)))
         bin_weight_kernel_size = int(2 * bin_weight_stride - 1);
         return bin_weight_kernel_size, bin_weight_stride
+    def get_rotation_matrix(self, angle_in_radians):
+        angle_in_radians = angle_in_radians.view(-1, 1, 1);
+        sin_a = torch.sin(angle_in_radians)
+        cos_a = torch.cos(angle_in_radians)
+        A1_x = torch.cat([cos_a, sin_a], dim = 2)
+        A2_x = torch.cat([-sin_a, cos_a], dim = 2)
+        transform = torch.cat([A1_x,A2_x], dim = 1)
+        return transform
 
-    def forward(self, x):
+    def forward(self, x, return_rot_matrix = False):
         gx = self.gx(F.pad(x, (1,1,0, 0), 'replicate'))
         gy = self.gy(F.pad(x, (0,0, 1,1), 'replicate'))
         mag = torch.sqrt(gx * gx + gy * gy + 1e-10)
@@ -175,11 +183,14 @@ class OrientationDetector(nn.Module):
         wo1_big = wo1_big * mag
         ang_bins = []
         for i in range(0, self.num_ang_bins):
-            ang_bins.append(F.adaptive_avg_pool2d((bo0_big == i).float() * wo0_big, (1,1))) 
+            ang_bins.append(F.adaptive_avg_pool2d((bo0_big == i).float() * wo0_big, (1,1)))
         ang_bins = torch.cat(ang_bins,1).view(-1,1,self.num_ang_bins)
         ang_bins = self.angular_smooth(ang_bins)
         values, indices = ang_bins.view(-1,self.num_ang_bins).max(1)
-        return (2. * float(np.pi) * indices.float() / float(self.num_ang_bins)) - 1.0 * float(np.pi)
+        angle =  -((2. * float(np.pi) * indices.float() / float(self.num_ang_bins)) - float(math.pi))
+        if return_rot_matrix:
+            return self.get_rotation_matrix(angle)
+        return angle
     
 class NMS2d(nn.Module):
     def __init__(self, kernel_size = 3, threshold = 0):
